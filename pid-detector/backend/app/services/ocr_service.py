@@ -1,146 +1,170 @@
 """
 ocr_service.py
 
-Extracts instrument tag text (e.g. "27-MOV-021", "PT-101") from a P&ID image.
-This is deliberately a separate stage from YOLO symbol detection (see yolo_service.py) —
-text recognition and object detection are different sub-problems, and keeping them
-as separate, independently testable functions is what let us debug and improve each
-without touching the other.
+Reads the equipment / instrument tag (e.g. "27-MOV-021", "PT-101") for each
+symbol that YOLO detected.
 
-Engine: Tesseract via pytesseract. Chosen over EasyOCR for this project because:
-  - No model weights to download at runtime (EasyOCR pulls ~100MB+ on first use,
-    which is a real problem on a locked-down or offline deployment machine).
-  - Ships as a standard apt/brew/choco package — easy for a teammate to install
-    without a Python-CUDA dependency chain.
-  - Good enough accuracy on clean, machine-printed diagram text (P&ID tags are
-    printed CAD text, not handwriting — Tesseract's sweet spot).
+For every detection the bounding box is cropped (with padding, because tags
+often sit beside a symbol rather than inside it), upscaled 2x, thresholded
+with Otsu, and run through Tesseract. All tokens on a text line are merged
+left-to-right, so multi-part tags are not truncated to a single token.
 
-If tag recall turns out too low on real scanned diagrams (vs. clean CAD exports),
-EasyOCR is the documented fallback — see the note at the bottom of this file.
+postprocess.py calls:  read_tags(img, detections) -> detections with "tag" set
 """
+import logging
+import os
+import re
+import shutil
+from typing import Dict, List, Optional
 
-from typing import TypedDict
+import cv2
+import numpy as np
 import pytesseract
-from PIL import Image
+
+logger = logging.getLogger(__name__)
+
+# Windows: fall back to the default install path if tesseract is not on PATH.
+_DEFAULT_WIN_TESSERACT = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+if shutil.which("tesseract") is None and os.path.exists(_DEFAULT_WIN_TESSERACT):
+    pytesseract.pytesseract.tesseract_cmd = _DEFAULT_WIN_TESSERACT
+
+# A tag needs at least one letter and one digit, made of 1-4 hyphen-separated
+# parts, e.g. 27-MOV-021, PT-101, FV310.
+TAG_PATTERN = re.compile(
+    r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9]{1,6}(?:-[A-Z0-9]{1,6}){0,3}$"
+)
+
+MIN_TOKEN_CONF = 40.0   # Tesseract confidence (0-100) below which a token is dropped
+PAD_RATIO = 0.5         # how far to grow each box (fraction of its larger side)
+MIN_PAD_PX = 12
+UPSCALE = 2
+TESSERACT_CONFIG = "--oem 3 --psm 11"  # sparse text: finds scattered labels
 
 
-class OcrRegion(TypedDict):
-    text: str
-    bbox: list[float]        # [x1, y1, x2, y2] in original image pixel coordinates
-    confidence: float        # 0-100, Tesseract's own confidence score
+def _to_gray(crop: np.ndarray) -> np.ndarray:
+    if crop.ndim == 2:
+        return crop
+    if crop.shape[2] == 4:
+        return cv2.cvtColor(crop, cv2.COLOR_BGRA2GRAY)
+    return cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
 
 
-def extract_text_regions(
-    image: Image.Image,
-    min_confidence: float = 40.0,
-    min_text_length: int = 2,
-) -> list[OcrRegion]:
-    """
-    Run OCR over the full image and return one region per line of text,
-    above a confidence and length floor.
+def _preprocess(crop: np.ndarray) -> np.ndarray:
+    gray = _to_gray(crop)
+    gray = cv2.resize(gray, None, fx=UPSCALE, fy=UPSCALE, interpolation=cv2.INTER_CUBIC)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # white border helps Tesseract with text that touches the crop edge
+    return cv2.copyMakeBorder(binary, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=255)
 
-    Tesseract returns one token per *word* — a single tag like "FT-204" can
-    come back as two tokens ("FT", "-204") if there's a rendering/kerning
-    gap around the hyphen. Returning raw word tokens would silently break
-    tag matching, so this groups tokens by Tesseract's own (block, paragraph,
-    line) indices and merges everything on the same line into one region
-    before returning it — this is what actually gets tested and used
-    downstream, not the raw per-word output.
 
-    Args:
-        image: a PIL Image (already opened/decoded — same object your YOLO
-            service receives, so both stages share one decode of the upload).
-        min_confidence: Tesseract confidence (0-100) below which a *token* is
-            dropped before line-grouping. 40 is a permissive default tuned for
-            small, dense diagram text — raise it if you're seeing too much
-            OCR noise (see the false-positive note at the bottom of this file).
-        min_text_length: drops single-character tokens, which are almost
-            always noise (a stray line fragment Tesseract misreads as a letter).
+def _clean(token: str) -> str:
+    t = token.strip().upper()
+    t = re.sub("[\u2010-\u2015\u2212_]", "-", t)  # dash look-alikes -> '-'
+    return re.sub(r"[^A-Z0-9-]", "", t)
 
-    Returns:
-        List of OcrRegion dicts, one per recognized line of text.
-    """
-    raw = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
 
-    # Group surviving tokens by (block, paragraph, line), then further split
-    # on large horizontal gaps — two unrelated tags can land on the same
-    # Tesseract "line" index if they sit at the same height in different
-    # columns of the diagram, so line_num alone isn't a safe merge key.
-    line_groups: dict[tuple[int, int, int], list[int]] = {}
-    n = len(raw["text"])
-    for i in range(n):
-        text = raw["text"][i].strip()
-        conf = float(raw["conf"][i])
-        if not text or len(text) < min_text_length or conf < min_confidence:
+def _group_lines(tokens: List[Dict]) -> List[List[Dict]]:
+    """Group tokens whose vertical centres are close into text lines."""
+    tokens = sorted(tokens, key=lambda t: t["top"] + t["h"] / 2)
+    lines: List[List[Dict]] = []
+    for tok in tokens:
+        cy = tok["top"] + tok["h"] / 2
+        if lines:
+            line = lines[-1]
+            line_cy = sum(t["top"] + t["h"] / 2 for t in line) / len(line)
+            line_h = max(t["h"] for t in line)
+            if abs(cy - line_cy) <= 0.6 * max(line_h, tok["h"]):
+                line.append(tok)
+                continue
+        lines.append([tok])
+    return lines
+
+
+def _join(tokens: List[Dict]) -> str:
+    """Merge tokens left-to-right into one string, hyphen-joined."""
+    text = ""
+    for tok in sorted(tokens, key=lambda t: t["left"]):
+        part = tok["text"]
+        if not text:
+            text = part
+        elif text.endswith("-") or part.startswith("-"):
+            text += part
+        else:
+            text += "-" + part
+    return re.sub(r"-{2,}", "-", text).strip("-")
+
+
+def _mean_conf(tokens: List[Dict]) -> float:
+    return sum(t["conf"] for t in tokens) / len(tokens)
+
+
+def _read_tag_for_box(img: np.ndarray, bbox: List[float]) -> Optional[str]:
+    h_img, w_img = img.shape[:2]
+    x1, y1, x2, y2 = bbox
+    pad = max(int(max(x2 - x1, y2 - y1) * PAD_RATIO), MIN_PAD_PX)
+    cx1, cy1 = max(0, int(x1 - pad)), max(0, int(y1 - pad))
+    cx2, cy2 = min(w_img, int(x2 + pad)), min(h_img, int(y2 + pad))
+
+    crop = img[cy1:cy2, cx1:cx2]
+    if crop.size == 0 or crop.shape[0] < 8 or crop.shape[1] < 8:
+        return None
+
+    data = pytesseract.image_to_data(
+        _preprocess(crop), config=TESSERACT_CONFIG, output_type=pytesseract.Output.DICT
+    )
+
+    tokens: List[Dict] = []
+    for i, raw_text in enumerate(data["text"]):
+        text = _clean(raw_text)
+        try:
+            conf = float(data["conf"][i])
+        except (TypeError, ValueError):
             continue
-        key = (raw["block_num"][i], raw["par_num"][i], raw["line_num"][i])
-        line_groups.setdefault(key, []).append(i)
+        if not text or conf < MIN_TOKEN_CONF:
+            continue
+        tokens.append(
+            {
+                "text": text,
+                "left": data["left"][i],
+                "top": data["top"][i],
+                "h": data["height"][i],
+                "conf": conf,
+            }
+        )
+    if not tokens:
+        return None
 
-    # Median character height sets the gap threshold — a gap wider than
-    # ~2.5x the text height is treated as "different tag", not a kerning gap.
-    heights = [raw["height"][i] for group in line_groups.values() for i in group]
-    median_h = sorted(heights)[len(heights) // 2] if heights else 20
-    max_gap = median_h * 2.5
+    # Candidates: each text line merged, each single token, and everything in
+    # the crop merged (instrument bubbles put "PT" and "101" on two lines).
+    lines = _group_lines(tokens)
+    candidates = [(_join(line), _mean_conf(line)) for line in lines]
+    candidates += [(t["text"], t["conf"]) for t in tokens]
+    ordered = [t for line in lines for t in sorted(line, key=lambda t: t["left"])]
+    candidates.append((_join(ordered), _mean_conf(ordered)))
 
-    clusters: list[list[int]] = []
-    for token_indices in line_groups.values():
-        token_indices.sort(key=lambda i: raw["left"][i])
-        current: list[int] = [token_indices[0]]
-        for idx in token_indices[1:]:
-            prev_idx = current[-1]
-            gap = raw["left"][idx] - (raw["left"][prev_idx] + raw["width"][prev_idx])
-            if gap > max_gap:
-                clusters.append(current)
-                current = [idx]
-            else:
-                current.append(idx)
-        clusters.append(current)
-
-    regions: list[OcrRegion] = []
-    for token_indices in clusters:
-        # Tokens come out in reading order already; join and take the union bbox.
-        token_indices.sort(key=lambda i: raw["left"][i])
-        text = "".join(raw["text"][i].strip() for i in token_indices) \
-            if _looks_hyphen_joined(raw, token_indices) \
-            else " ".join(raw["text"][i].strip() for i in token_indices)
-
-        xs1 = [raw["left"][i] for i in token_indices]
-        ys1 = [raw["top"][i] for i in token_indices]
-        xs2 = [raw["left"][i] + raw["width"][i] for i in token_indices]
-        ys2 = [raw["top"][i] + raw["height"][i] for i in token_indices]
-        confs = [float(raw["conf"][i]) for i in token_indices]
-
-        regions.append({
-            "text": text,
-            "bbox": [float(min(xs1)), float(min(ys1)), float(max(xs2)), float(max(ys2))],
-            "confidence": round(sum(confs) / len(confs), 1),
-        })
-
-    return regions
+    best: Optional[tuple] = None
+    for text, conf in candidates:
+        if len(text) < 3 or not TAG_PATTERN.match(text):
+            continue
+        if best is None or (conf, len(text)) > (best[1], len(best[0])):
+            best = (text, conf)
+    return best[0] if best else None
 
 
-def _looks_hyphen_joined(raw: dict, token_indices: list[int]) -> bool:
-    """
-    Heuristic: if any token on this line is bare punctuation ('-', '/', ':')
-    or starts/ends with one, the line is a single tag like "FT-204" split by
-    kerning, not separate words — join with no space. Otherwise join with a
-    space (e.g. a real two-word label).
-    """
-    for i in token_indices:
-        t = raw["text"][i].strip()
-        if t and (t[0] in "-/:" or t[-1] in "-/:"):
-            return True
-    return False
-
-
-# --- Fallback note ---
-# If Tesseract's recall is too low on your actual test diagrams (common with
-# scanned/photographed P&IDs rather than clean CAD exports), swap in EasyOCR:
-#
-#   import easyocr
-#   reader = easyocr.Reader(['en'], gpu=False)
-#   results = reader.readtext(image_path)  # returns [(bbox_poly, text, conf), ...]
-#
-# EasyOCR's bbox is a 4-point polygon, not [x1,y1,x2,y2] — convert with
-# min/max over the polygon's x and y values before passing to
-# postprocess.associate_tags_with_symbols().
+def read_tags(img: np.ndarray, detections: List[Dict]) -> List[Dict]:
+    """Return a copy of each detection with its OCR'd "tag" (or None)."""
+    results: List[Dict] = []
+    ocr_available = True
+    for det in detections:
+        out = dict(det)
+        out["tag"] = None
+        if ocr_available:
+            try:
+                out["tag"] = _read_tag_for_box(img, det["bbox"])
+            except pytesseract.TesseractNotFoundError:
+                logger.warning(
+                    "Tesseract is not installed or not on PATH - tags will be empty."
+                )
+                ocr_available = False
+        results.append(out)
+    return results

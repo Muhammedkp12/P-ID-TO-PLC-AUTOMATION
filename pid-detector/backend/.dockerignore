@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+training/dataset/
+*.log
+.git
+.gitignore
+.DS_Store

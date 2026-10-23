@@ -1,0 +1,19 @@
+# Ultralytics YOLO dataset config for P&ID symbol detection.
+# Point train/val at your labeled image folders (YOLO .txt label format).
+path: ./dataset
+train: images/train
+val: images/val
+
+# Update this list to match the symbol classes you've labeled
+# (valves, instruments, pumps, line breaks, etc.)
+names:
+  0: gate_valve
+  1: check_valve
+  2: control_valve
+  3: ball_valve
+  4: instrument_bubble
+  5: pump
+  6: flange
+  7: reducer
+  8: pipe_line_break
+  9: relief_valve

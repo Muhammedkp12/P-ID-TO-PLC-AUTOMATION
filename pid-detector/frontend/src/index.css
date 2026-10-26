@@ -756,3 +756,47 @@ body,
 .app-header {
   background: #f97316 !important;
 }
+
+/* Traditional login layout */
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0;
+  color: #6b7280;
+  font-size: 14px;
+}
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #e5e7eb;
+}
+.auth-google { display: flex; justify-content: center; min-height: 44px; }
+.auth-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ===== Login page: orange bar on top, card centred ===== */
+.auth-page {
+  position: fixed !important;
+  inset: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+  overflow: auto;
+  background: #ffffff !important;
+}
+
+.auth-page .app-header {
+  flex: 0 0 auto;
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  position: relative;
+}
+
+.auth-page .auth-card {
+  margin: auto !important;
+  flex: 0 0 auto;
+}

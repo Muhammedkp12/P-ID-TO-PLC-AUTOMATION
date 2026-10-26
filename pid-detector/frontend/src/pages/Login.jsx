@@ -1,169 +1,205 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { login, register, resetPassword } from "../auth.js";
-import AuthBackground from "../components/AuthBackground.jsx";
+import {
+  login, register, verifyEmail, googleLogin, forgotPassword, resetPassword,
+} from "../auth.js";
+
+const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+
 const TITLES = {
-  login: "Log in or sign up in seconds",
+  login: "Log in",
   register: "Create your account",
   forgot: "Reset your password",
 };
 
 export default function Login({ mode = "login" }) {
   const navigate = useNavigate();
+  const googleBtn = useRef(null);
+  const [step, setStep] = useState(1);
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [code, setCode] = useState("");
   const [showPw, setShowPw] = useState(false);
-  const [showEmailForm, setShowEmailForm] = useState(mode !== "login");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  const handleSubmit = (e) => {
+  const showGoogle = mode !== "forgot" && step === 1;
+
+  // Real Google button
+  useEffect(() => {
+    if (!showGoogle || !CLIENT_ID) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries += 1;
+      if (window.google?.accounts?.id && googleBtn.current) {
+        clearInterval(timer);
+        window.google.accounts.id.initialize({
+          client_id: CLIENT_ID,
+          callback: async (resp) => {
+            setError("");
+            setBusy(true);
+            const r = await googleLogin(resp.credential);
+            setBusy(false);
+            if (!r.ok) return setError(r.error);
+            navigate("/");
+          },
+        });
+        window.google.accounts.id.renderButton(googleBtn.current, {
+          theme: "outline",
+          size: "large",
+          width: 380,
+          text: mode === "register" ? "signup_with" : "continue_with",
+        });
+      } else if (tries > 50) {
+        clearInterval(timer);
+      }
+    }, 100);
+    return () => clearInterval(timer);
+  }, [mode, showGoogle, navigate]);
+
+  const submit = async (e) => {
     e.preventDefault();
     setError("");
     setNotice("");
-    let result;
-
-    if (mode === "login") {
-      result = login(username, password);
-    } else if (mode === "register") {
-      if (password !== confirm) return setError("Passwords do not match.");
-      result = register(username, email, password);
-    } else {
-      if (password !== confirm) return setError("Passwords do not match.");
-      result = resetPassword(email, password);
+    setBusy(true);
+    try {
+      let r;
+      if (mode === "login") {
+        r = await login(username, password);
+        if (r.ok) return navigate("/");
+      } else if (mode === "register") {
+        if (step === 1) {
+          if (password !== confirm) return setError("Passwords do not match.");
+          r = await register(username, email, password);
+          if (r.ok) {
+            setStep(2);
+            setNotice(`We sent a 6-digit code to ${email}.`);
+          }
+        } else {
+          r = await verifyEmail(email, code);
+          if (r.ok) return navigate("/");
+        }
+      } else {
+        if (step === 1) {
+          r = await forgotPassword(email);
+          if (r.ok) {
+            setStep(2);
+            setNotice("If that email has an account, we sent a 6-digit code.");
+          }
+        } else {
+          if (password !== confirm) return setError("Passwords do not match.");
+          r = await resetPassword(email, code, password);
+          if (r.ok) {
+            setNotice("Password changed. Taking you to log in...");
+            setTimeout(() => navigate("/login"), 1200);
+          }
+        }
+      }
+      if (r && !r.ok) setError(r.error);
+    } finally {
+      setBusy(false);
     }
-
-    if (!result.ok) return setError(result.error);
-
-    if (mode === "forgot") {
-      setNotice("Password updated. Taking you to log in...");
-      setTimeout(() => navigate("/login"), 1200);
-      return;
-    }
-    navigate("/");
   };
 
-  const showForm = mode !== "login" || showEmailForm;
+  const pwType = showPw ? "text" : "password";
+  const buttonText = {
+    login: "Log in",
+    register: step === 1 ? "Sign up" : "Verify email",
+    forgot: step === 1 ? "Send code" : "Reset password",
+  }[mode];
 
   return (
     <div className="auth-page">
-      <AuthBackground />
-      <div className="auth-brand">Lineweight</div>
+      <header className="app-header">
+        <div className="brand">
+          <span className="brand-mark">Lineweight</span>
+          <span className="brand-tag">P&amp;ID symbol detection</span>
+        </div>
+      </header>
 
       <div className="auth-card">
         <h1>{TITLES[mode]}</h1>
-        <p className="auth-sub">
-          {mode === "login" && "Use your email or another service to continue with Lineweight (it's free!)"}
-          {mode === "register" && "Fill in your details to get started."}
-          {mode === "forgot" && "Enter your account email and choose a new password."}
-        </p>
 
-        {mode === "login" && !showEmailForm && (
-          <>
-            <button className="auth-btn" onClick={() => setShowEmailForm(true)}>
-              Continue with username
-            </button>
-            <button
-              className="auth-btn"
-              onClick={() =>
-                setNotice("Google sign-in needs a Google Client ID. Not set up yet.")
-              }
-            >
-              Continue with Google
-            </button>
-            <button className="auth-btn" onClick={() => navigate("/register")}>
-              Continue with email
-            </button>
-          </>
-        )}
+        <form onSubmit={submit} className="auth-form">
+          {mode === "login" && (
+            <>
+              <input className="auth-input" placeholder="Username or email"
+                value={username} onChange={(e) => setUsername(e.target.value)} autoFocus />
+              <input className="auth-input" type={pwType} placeholder="Password"
+                value={password} onChange={(e) => setPassword(e.target.value)} />
+            </>
+          )}
 
-        {showForm && (
-          <form onSubmit={handleSubmit} className="auth-form">
-            {mode === "login" && (
-              <input
-                className="auth-input"
-                placeholder="Username or email"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoFocus
-              />
-            )}
+          {mode === "register" && step === 1 && (
+            <>
+              <input className="auth-input" placeholder="Username"
+                value={username} onChange={(e) => setUsername(e.target.value)} autoFocus />
+              <input className="auth-input" type="email" placeholder="Email"
+                value={email} onChange={(e) => setEmail(e.target.value)} />
+              <input className="auth-input" type={pwType} placeholder="Password (8+ characters)"
+                value={password} onChange={(e) => setPassword(e.target.value)} />
+              <input className="auth-input" type={pwType} placeholder="Confirm password"
+                value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+            </>
+          )}
 
-            {mode === "register" && (
-              <>
-                <input
-                  className="auth-input"
-                  placeholder="Username"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                />
-                <input
-                  className="auth-input"
-                  type="email"
-                  placeholder="Email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </>
-            )}
+          {mode === "forgot" && step === 1 && (
+            <input className="auth-input" type="email" placeholder="Account email"
+              value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />
+          )}
 
-            {mode === "forgot" && (
-              <input
-                className="auth-input"
-                type="email"
-                placeholder="Account email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            )}
+          {step === 2 && (
+            <>
+              <input className="auth-input" placeholder="6-digit code" inputMode="numeric"
+                value={code} onChange={(e) => setCode(e.target.value)} autoFocus />
+              {mode === "forgot" && (
+                <>
+                  <input className="auth-input" type={pwType} placeholder="New password (8+ characters)"
+                    value={password} onChange={(e) => setPassword(e.target.value)} />
+                  <input className="auth-input" type={pwType} placeholder="Confirm new password"
+                    value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+                </>
+              )}
+            </>
+          )}
 
-            <input
-              className="auth-input"
-              type={showPw ? "text" : "password"}
-              placeholder={mode === "forgot" ? "New password" : "Password"}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-
-            {mode !== "login" && (
-              <input
-                className="auth-input"
-                type={showPw ? "text" : "password"}
-                placeholder="Confirm password"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-              />
-            )}
-
+          {(mode === "login" || (mode !== "login" && (step === 2 ? mode === "forgot" : mode === "register"))) && (
             <label className="auth-check">
               <input type="checkbox" checked={showPw} onChange={(e) => setShowPw(e.target.checked)} />
               Show password
             </label>
+          )}
 
-            {error && <div className="auth-error">{error}</div>}
-            {notice && <div className="auth-notice">{notice}</div>}
+          {error && <div className="auth-error">{error}</div>}
+          {notice && <div className="auth-notice">{notice}</div>}
 
-            <button type="submit" className="auth-btn auth-primary">
-              {mode === "login" && "Log in"}
-              {mode === "register" && "Sign up"}
-              {mode === "forgot" && "Reset password"}
-            </button>
+          <button type="submit" className="auth-btn auth-primary" disabled={busy}>
+            {busy ? "Please wait..." : buttonText}
+          </button>
 
-            {mode === "login" && (
-              <Link className="auth-link" to="/forgot-password">Forgot password?</Link>
+          {mode === "login" && (
+            <Link className="auth-link" to="/forgot-password">Forgot password?</Link>
+          )}
+        </form>
+
+        {showGoogle && (
+          <>
+            <div className="auth-divider"><span>or</span></div>
+            {CLIENT_ID ? (
+              <div ref={googleBtn} className="auth-google" />
+            ) : (
+              <div className="auth-error">Google sign-in is not configured (missing VITE_GOOGLE_CLIENT_ID).</div>
             )}
-          </form>
+          </>
         )}
 
-        {!showForm && notice && <div className="auth-notice">{notice}</div>}
-
         <div className="auth-switch">
-          {mode === "login" && (
+          {mode === "login" ? (
             <>New here? <Link to="/register">Create an account</Link></>
-          )}
-          {mode !== "login" && (
+          ) : (
             <>Already have an account? <Link to="/login">Log in</Link></>
           )}
         </div>

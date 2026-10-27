@@ -26,6 +26,14 @@ export default function Features() {
             <h3>Review on the drawing</h3>
             <p>Click a row to highlight its symbol on the sheet, or click a box to jump to its row.</p>
           </div>
+          <div className="feature">
+            <h3>Audit trail</h3>
+            <p>Every upload, detection run and edit is recorded with the user and the time, so you can trace who changed what and when.</p>
+          </div>
+          <div className="feature">
+            <h3>PLC code</h3>
+            <p>Turn the detected valves, instruments and tags into PLC code, such as ladder logic or structured text, ready to review and export.</p>
+          </div>
         </div>
       </div>
     </section>

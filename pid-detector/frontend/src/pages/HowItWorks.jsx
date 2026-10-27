@@ -21,6 +21,16 @@ export default function HowItWorks() {
             <h3>Review the results</h3>
             <p>Check the boxes on the drawing and the detection list side by side.</p>
           </li>
+          <li>
+            <span className="step-num">4</span>
+            <h3>Generate PLC code</h3>
+            <p>Turn the confirmed symbols and tags into PLC code you can review and export.</p>
+          </li>
+          <li>
+            <span className="step-num">5</span>
+            <h3>Check the audit trail</h3>
+            <p>See who uploaded, ran and changed each drawing, and when.</p>
+          </li>
         </ol>
         <p style={{ marginTop: 24 }}>
           <Link className="btn-primary" to="/detect">Try it now</Link>

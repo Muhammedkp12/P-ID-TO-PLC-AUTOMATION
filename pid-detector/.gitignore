@@ -1,0 +1,8 @@
+backend/data/audit_log.jsonl
+
+.venv/
+node_modules/
+dist/
+__pycache__/
+.pytest_cache/
+result*.json

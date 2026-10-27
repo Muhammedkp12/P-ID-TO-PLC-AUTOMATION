@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, UploadFile
 
 from app.schemas.detection import DetectionResponse, HealthResponse, TrainRequest, TrainResponse
 from app.services import yolo_service
+from app.services.class_names import class_label
 from app.services.postprocess import merge_symbol_and_tag_results
 from app.utils.image_utils import decode_image
 
@@ -37,6 +38,9 @@ async def detect(file: UploadFile):
         raise HTTPException(status_code=503, detail=str(e))
 
     detections = merge_symbol_and_tag_results(img, raw_detections)
+    for d in detections:
+        d["class"] = f"{class_label(d['class'])} [{d['class']}]"
+
     height, width = img.shape[:2]
 
     return DetectionResponse(

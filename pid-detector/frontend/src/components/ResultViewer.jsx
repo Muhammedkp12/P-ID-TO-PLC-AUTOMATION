@@ -30,14 +30,14 @@ export default function ResultViewer({ imageUrl, width, height, detections, sele
     <div className="panel">
       <div className="panel-header">
         <span>02 · Annotated drawing</span>
-        {detections?.length > 0 && <span className="count">{detections.length} found</span>}
+        {detections?.length > 0 && <span className="count">{detections.length} tags</span>}
       </div>
 
       <div className="viewer-body">
-        {isRunning && <Loader label="Scanning tiles, matching symbols…" />}
+        {isRunning && <Loader label="Detecting symbols, reading tags, generating code…" />}
 
         {!isRunning && !hasResult && (
-          <p className="viewer-empty">Upload a drawing to see detected symbols here.</p>
+          <p className="viewer-empty">Upload a drawing to see the tags it contains.</p>
         )}
 
         {!isRunning && hasResult && (
@@ -52,7 +52,7 @@ export default function ResultViewer({ imageUrl, width, height, detections, sele
               {detections.map((d, i) => {
                 const [x1, y1, x2, y2] = d.bbox;
                 const selected = i === selectedIndex;
-                const label = d.tag ? `${d.class} · ${d.tag}` : d.class;
+                const label = d.tag;
                 const charW = 6.2; // approx mono-font advance at 11px, in SVG units
                 const labelW = Math.max(label.length * charW + 10, 30);
                 return (

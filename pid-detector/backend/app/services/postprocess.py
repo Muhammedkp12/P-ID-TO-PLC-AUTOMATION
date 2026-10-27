@@ -44,12 +44,44 @@ def dedupe_detections(detections: List[Dict], iou_threshold: float = 0.5) -> Lis
     return kept
 
 
+def _overlaps(box, others, thr=0.25):
+    bx = [box[0], box[1], box[2], box[3]]
+    for o in others:
+        ob = o["bbox"]
+        ix = max(0.0, min(bx[2], ob[2]) - max(bx[0], ob[0]))
+        iy = max(0.0, min(bx[3], ob[3]) - max(bx[1], ob[1]))
+        inter = ix * iy
+        union = ((bx[2] - bx[0]) * (bx[3] - bx[1]) +
+                 (ob[2] - ob[0]) * (ob[3] - ob[1]) - inter)
+        if union > 0 and inter / union > thr:
+            return True
+    return False
+
+
+def _good_extra(det):
+    """A bubble found only by the circle search is kept only when its tag looks
+    like a real ISA tag, so stray circles do not add junk."""
+    from app.services.ocr_service import KNOWN_CODES
+    tag = det.get("tag") or ""
+    if "-" not in tag:
+        return False
+    letters, digits = tag.split("-", 1)
+    return (letters in KNOWN_CODES and digits.isdigit() and digits.strip("0") != ""
+            and det.get("tag_confidence", 0) >= 0.5)
+
+
 def merge_symbol_and_tag_results(
     img: np.ndarray,
     raw_detections: List[Dict],
     iou_threshold: float = 0.5,
 ) -> List[Dict]:
-    """Full postprocess pipeline: dedupe tile overlaps, then OCR each survivor's tag."""
+    """Full postprocess pipeline: dedupe tile overlaps, add bubbles the model
+    missed (circle search), then OCR each survivor's tag."""
+    from app.services.bubble_service import detect_bubbles
+
     deduped = dedupe_detections(raw_detections, iou_threshold=iou_threshold)
     deduped.sort(key=lambda d: d["confidence"], reverse=True)
-    return read_tags(img, deduped)
+    extra = [b for b in detect_bubbles(img) if not _overlaps(b["bbox"], deduped)]
+    deduped = read_tags(img, deduped)
+    extra = [b for b in read_tags(img, extra) if _good_extra(b)]
+    return deduped + extra

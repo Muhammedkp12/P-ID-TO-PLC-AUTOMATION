@@ -1,38 +1,54 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import UploadPanel from "./components/UploadPanel.jsx";
 import ResultViewer from "./components/ResultViewer.jsx";
 import DetectionTable from "./components/DetectionTable.jsx";
-import { detectSymbols, checkHealth } from "./api/detectApi.js";
+import PlcPanel from "./components/PlcPanel.jsx";
+import AuditPanel from "./components/AuditPanel.jsx";
+import { checkHealth, generatePlc, getAudit, verifyAudit } from "./api/detectApi.js";
 
 export default function App() {
   const [imageUrl, setImageUrl] = useState(null);
-  const [result, setResult] = useState(null); // { width, height, detections, filename }
+  const [result, setResult] = useState(null); // full /generate response
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState(null);
   const [selectedIndex, setSelectedIndex] = useState(null);
-  const [backendReady, setBackendReady] = useState(null); // null = unknown
+  const [backendReady, setBackendReady] = useState(null);
+  const [records, setRecords] = useState([]);
+  const [chain, setChain] = useState(null);
+
+  // Only symbols whose tag was read are shown anywhere in the UI.
+  const tags = useMemo(
+    () => (result?.detections || []).filter((d) => d.tag),
+    [result]
+  );
+
+  const refreshAudit = async () => {
+    try {
+      setRecords(await getAudit());
+      setChain(await verifyAudit());
+    } catch {
+      setChain({ valid: false, records: 0, broken_at: null });
+    }
+  };
 
   useEffect(() => {
     checkHealth()
       .then((h) => setBackendReady(!!h.model_loaded))
       .catch(() => setBackendReady(false));
+    refreshAudit();
   }, []);
 
-  const runDetection = async (file) => {
+  const runPipeline = async (file) => {
     setError(null);
     setIsRunning(true);
     setSelectedIndex(null);
-
-    const localUrl = URL.createObjectURL(file);
-    setImageUrl(localUrl);
-
+    setResult(null);
+    setImageUrl(URL.createObjectURL(file));
     try {
-      const data = await detectSymbols(file);
-      setResult(data);
+      setResult(await generatePlc(file));
+      await refreshAudit();
     } catch (err) {
-      const detail = err?.response?.data?.detail;
-      setError(detail || "Detection failed. Is the backend running?");
-      setResult(null);
+      setError(err?.response?.data?.detail || "Processing failed. Is the backend running?");
     } finally {
       setIsRunning(false);
     }
@@ -43,13 +59,11 @@ export default function App() {
       <header className="app-header">
         <div className="brand">
           <span className="brand-mark">Lineweight</span>
-          <span className="brand-tag">P&amp;ID symbol detection</span>
+          <span className="brand-tag">P&amp;ID to PLC</span>
         </div>
         <div className="header-status">
           <span
-            className={`status-dot ${
-              isRunning ? "busy" : backendReady ? "ready" : ""
-            }`}
+            className={`status-dot ${isRunning ? "busy" : backendReady ? "ready" : ""}`}
           />
           {isRunning
             ? "Processing"
@@ -62,38 +76,45 @@ export default function App() {
       </header>
 
       <section className="hero">
-        <p className="hero-eyebrow">Symbol · tag · confidence</p>
+        <p className="hero-eyebrow">Tag · PLC code · audit trail</p>
         <h1>
-          Read every valve, instrument and <em>tag</em> on the sheet.
+          From a P&amp;ID drawing to <em>PLC code</em>, with a record of it.
         </h1>
         <p>
-          Upload a scanned or exported P&amp;ID drawing. A YOLO model finds
-          each piping and instrumentation symbol, then OCR reads the tag
-          text next to it — turning a static drawing into a structured list
-          you can search, export, or feed into a digital twin.
+          Upload a P&amp;ID. Symbols are detected, their tags are read by OCR,
+          Structured Text is generated, and every run is added to a hash-chained
+          audit log.
         </p>
       </section>
 
       <main className="workspace">
         <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-          <UploadPanel onRun={runDetection} isRunning={isRunning} error={error} />
+          <UploadPanel onRun={runPipeline} isRunning={isRunning} error={error} />
           <ResultViewer
             imageUrl={imageUrl}
             width={result?.width}
             height={result?.height}
-            detections={result?.detections || []}
+            detections={tags}
             selectedIndex={selectedIndex}
             onSelect={setSelectedIndex}
             isRunning={isRunning}
           />
         </div>
 
-        <DetectionTable
-          detections={result?.detections || []}
-          selectedIndex={selectedIndex}
-          onSelect={setSelectedIndex}
-        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+          <DetectionTable tags={tags} selectedIndex={selectedIndex} onSelect={setSelectedIndex} />
+          <PlcPanel plc={result} isRunning={isRunning} />
+        </div>
       </main>
+
+      <div style={{ padding: "0 40px 48px", position: "relative", zIndex: 1 }}>
+        <AuditPanel
+          records={records}
+          chain={chain}
+          latestIndex={result?.audit?.index}
+          onVerify={refreshAudit}
+        />
+      </div>
     </div>
   );
 }

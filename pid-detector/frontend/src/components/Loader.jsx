@@ -1,8 +1,8 @@
-export default function Loader({ label = "Running detection…" }) {
+export default function Loader({ label = "Working…" }) {
   return (
     <div className="loader" role="status" aria-live="polite">
-      <div className="loader-spinner" aria-hidden="true" />
-      <span>{label}</span>
+      <div className="loader-ring" aria-hidden="true" />
+      <p>{label}</p>
     </div>
   );
 }

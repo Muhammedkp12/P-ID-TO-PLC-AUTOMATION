@@ -8,3 +8,4 @@ dist/
 *.pt
 *.onnx
 *.zip
+users.db

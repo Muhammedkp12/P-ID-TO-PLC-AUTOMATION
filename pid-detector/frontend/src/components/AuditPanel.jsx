@@ -1,6 +1,11 @@
+import { useNavigate } from "react-router-dom";
+
 const short = (h) => (h ? `${h.slice(0, 10)}…` : "");
 
-export default function AuditPanel({ records, chain, latestIndex, onVerify }) {
+export default function AuditPanel({ records, chain, latestIndex }) {
+  const navigate = useNavigate();
+  const open = (index) => navigate(`/audit/${index}`);
+
   return (
     <div className="panel">
       <div className="panel-header">
@@ -39,7 +44,14 @@ export default function AuditPanel({ records, chain, latestIndex, onVerify }) {
             </thead>
             <tbody>
               {[...records].reverse().map((r) => (
-                <tr key={r.index} className={r.index === latestIndex ? "selected" : ""}>
+                <tr
+                  key={r.index}
+                  className={`audit-row ${r.index === latestIndex ? "selected" : ""}`}
+                  onClick={() => open(r.index)}
+                  onKeyDown={(e) => e.key === "Enter" && open(r.index)}
+                  tabIndex={0}
+                  title="Click to open this block"
+                >
                   <td>{r.index}</td>
                   <td>{r.timestamp.replace("T", " ").slice(0, 19)}</td>
                   <td>{r.user}</td>
@@ -55,12 +67,6 @@ export default function AuditPanel({ records, chain, latestIndex, onVerify }) {
           </table>
         </div>
       )}
-
-      <div style={{ padding: 12 }}>
-        <button type="button" className="run-button" onClick={onVerify}>
-          Re-verify chain
-        </button>
-      </div>
     </div>
   );
 }

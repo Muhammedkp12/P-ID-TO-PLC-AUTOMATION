@@ -6,6 +6,7 @@ import Features from "./pages/Features.jsx";
 import HowItWorks from "./pages/HowItWorks.jsx";
 import Detect from "./pages/Detect.jsx";
 import Login from "./pages/Login.jsx";
+import AuditDetail from "./pages/AuditDetail.jsx";
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/features" element={<Features />} />
           <Route path="/how-it-works" element={<HowItWorks />} />
           <Route path="/detect" element={<Detect />} />
+          <Route path="/audit/:id" element={<AuditDetail />} />
         </Route>
       </Route>
     </Routes>

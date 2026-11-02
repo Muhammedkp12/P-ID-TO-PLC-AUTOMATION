@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import audit, detect, generate, plc
 from app.auth_routes import router as auth_router
+from app.audit_view import router as audit_view_router
 
 app = FastAPI(
     title="P&ID Symbol Detection API",
@@ -21,6 +22,7 @@ app.include_router(detect.router)
 app.include_router(plc.router)
 app.include_router(generate.router)
 app.include_router(audit.router)
+app.include_router(audit_view_router)
 
 
 @app.get("/")
